@@ -69,7 +69,7 @@ jobs:
         run: |
           docker run --rm --entrypoint sh \
             "${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.version.outputs.image_tag }}" \
-            -lc 'bundle check && ruby -e "require \"omniauth_openid_connect\"; puts \"oidc gem OK (strategy: #{OmniAuth::Strategies::OpenIDConnect})\""'
+            -lc 'bundle check && bundle exec ruby -e "require \"omniauth_openid_connect\"; puts \"oidc gem OK (strategy: #{OmniAuth::Strategies::OpenIDConnect})\""'
 
       - name: Smoke test — fork marker present
         run: |
