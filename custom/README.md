@@ -16,6 +16,7 @@ own extension mechanism (`prepend_mod_with`), the same way `enterprise/` works:
 |------|---------|
 | `app/controllers/custom/devise_overrides/omniauth_callbacks_controller.rb` | `Custom::DeviseOverrides::OmniauthCallbacksController` — handles the `openid_connect` omniauth callback (provider matching), delegates everything else to `super` (composes with the Enterprise SAML module). |
 | `app/builders/custom/oidc_user_builder.rb` | `Custom::OidcUserBuilder` — finds/creates the agent from the OIDC auth hash by email; optional JIT provisioning into a fixed account. |
+| `app/controllers/custom/erp_sso_controller.rb` | `Custom::ErpSsoController` — ERP (Malibu) iframe hand-off: verifies a short-lived HMAC ticket and signs the agent in through the `sso_auth_token` login page (see `docs/oidc-sso.md` §10). |
 
 ## Env contract (see also `docs/oidc-sso.md`)
 
@@ -26,6 +27,7 @@ own extension mechanism (`prepend_mod_with`), the same way `enterprise/` works:
 | `OPENID_CONNECT_SCOPE` | Default `openid email profile`. |
 | `OPENID_CONNECT_JIT_ACCOUNT_ID` | Optional account id for auto-provisioning agents on first login. Unset → strict mode (agent must already exist). |
 | `ENABLE_OIDC_LOGIN` | Default `true`; set to `false` to hide the login button while keeping the strategy registered. |
+| `CHATWOOT_ERP_SSO_SECRET` | Shared HMAC secret for the ERP iframe hand-off (`/erp/sso`). Unset → endpoint answers 404. |
 
 ## Upstream merge policy
 

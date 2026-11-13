@@ -175,3 +175,47 @@ docker build -f docker/Dockerfile -t ghcr.io/<owner>/<repo>:v<new-tag>-oidc.<n> 
   through to `sign_up_user`. Fix: compare with `.to_s` and set `name: 'openid_connect'`.
   Distinct from `oidc-authentication-failed` (custom handler ran but email missing / no
   matching user and JIT off).
+
+## 10. ERP (Malibu) iframe hand-off SSO
+
+The ERP shell (`erp.tripwave.cloud`) embeds this Chatwoot in an iframe. An OIDC
+round-trip cannot run inside the frame — Authentik refuses to be framed — so the ERP
+backend mints a short-lived ticket and the iframe lands on this endpoint instead.
+
+```text
+ERP /dashboard/chats
+  → GET /api/integrations/chat/session          (ERP session cookie, RBAC)
+  → iframe: GET /erp/sso?ticket=…               (this fork)
+  → verify HMAC + exp + replay (Redis SET NX)
+  → Custom::OidcUserBuilder (same matching/JIT as OIDC)
+  → 302 /app/login?email=…&sso_auth_token=…&ssoAccountId=…&ssoConversationId=…
+  → SPA exchanges the token for a session (unchanged Chatwoot code)
+```
+
+Ticket format (mirrored in `apps/api-gateway/src/integrations/integrations.service.ts`):
+
+```text
+ticket  = "v1." + base64url(json) + "." + hex(HMAC_SHA256(secret, "v1." + base64url(json)))
+payload = { sub, email, name, avatarUrl, acc, conv, loc, jti, iat, exp }
+```
+
+| Env (rails + sidekiq) | Effect |
+|---|---|
+| `CHATWOOT_ERP_SSO_SECRET` | HMAC secret shared with the ERP. Unset → `/erp/sso` answers **404** (feature off). |
+
+Properties:
+
+- **One-time**: `Redis::Alfred.set("erp_sso_ticket:<jti>", '1', nx: true, ex: 60)`.
+- **Short-lived**: `exp - iat <= 60s`, `exp` in the future, `iat` not in the future (10s skew).
+- **No account enumeration**: every failure returns a bare `401`.
+- **Same users as OIDC**: `Custom::OidcUserBuilder` matches by email and JIT-provisions
+  into `OPENID_CONNECT_JIT_ACCOUNT_ID`, so ERP-driven and SSO-driven agents are identical.
+- **Framing** is enabled by the deployment (Traefik strips `X-Frame-Options` and pins
+  `Content-Security-Policy: frame-ancestors https://erp.tripwave.cloud` on the private
+  agent UI only) — never by this image.
+
+Manual acceptance (the automated request spec cannot cover the browser):
+
+1. Open the ERP as an agent → `/dashboard/chats` renders Chatwoot without a login form.
+2. Deep link from global search opens the exact conversation.
+3. Reload the iframe: session survives; if it expired, the ERP shows "re-authorize".

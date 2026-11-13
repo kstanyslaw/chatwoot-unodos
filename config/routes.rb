@@ -10,6 +10,11 @@ Rails.application.routes.draw do
 
   post 'resend_confirmation', to: 'auth/resend_confirmations#create'
 
+  # ERP (Malibu) iframe SSO hand-off: the ERP backend mints an HMAC ticket and
+  # the iframe lands here. The controller answers 404 while the shared secret
+  # is unset, so behaviour stays stock until the feature is configured.
+  get '/erp/sso', to: 'custom/erp_sso#show'
+
   ## renders the frontend paths only if its not an api only server
   if ActiveModel::Type::Boolean.new.cast(ENV.fetch('CW_API_ONLY_SERVER', false))
     root to: 'api#index'
