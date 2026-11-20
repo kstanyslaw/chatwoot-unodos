@@ -135,16 +135,37 @@
       return null;
     };
 
+    // Nearest group header for a leaf: Chatwoot renders groups as
+    // li > button(header) + ul > li > a(leaf). Walking up to the closest <li>
+    // that owns a <button> also flattens deeper nesting into the nearest group,
+    // because the ERP renders two levels.
+    var groupTriggerFor = function (link, aside) {
+      var node = link.parentElement;
+      while (node && node !== aside) {
+        if (node.tagName === 'LI') {
+          var trigger = node.querySelector(':scope > button');
+          if (trigger) return trigger;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    };
+
     var lastMenuJson = '';
     var scanMenu = function () {
       var aside = document.querySelector('aside');
       if (!aside) return false;
 
       var items = [];
+      var groups = {};
       var seen = {};
       var links = aside.querySelectorAll('a[href]');
+
       for (var i = 0; i < links.length; i += 1) {
         var link = links[i];
+        // Collapsed-sidebar popovers duplicate the same links.
+        if (link.closest('[data-popover-content]')) continue;
+
         var href = link.getAttribute('href') || '';
         var label = (link.textContent || '').replace(/\s+/g, ' ').trim();
         if (!label || !href || href.charAt(0) === '#') continue;
@@ -165,13 +186,33 @@
         if (seen[key]) continue;
         seen[key] = true;
 
-        items.push({
+        var entry = {
           label: label,
           path: path,
           external: external,
           icon: iconMarkup(link)
-        });
+        };
+
+        var trigger = external ? null : groupTriggerFor(link, aside);
+        if (!trigger) {
+          items.push(entry);
+          continue;
+        }
+
+        var groupLabel = (trigger.textContent || '').replace(/\s+/g, ' ').trim();
+        var groupKey = 'g:' + groupLabel;
+        var group = groups[groupKey];
+        if (!group) {
+          group = { label: groupLabel, icon: iconMarkup(trigger), children: [] };
+          groups[groupKey] = group;
+          items.push(group);
+        }
+        group.children.push(entry);
       }
+
+      items = items.filter(function (item) {
+        return !item.children || item.children.length > 0;
+      });
 
       var json = JSON.stringify(items);
       if (json !== lastMenuJson) {
