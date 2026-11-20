@@ -97,6 +97,44 @@
     // ── menu discovery ─────────────────────────────────────────────────────
     // Top-level sidebar entries as rendered for THIS user (permissions and
     // translations included). Nested channel lists are flattened by href.
+    //
+    // Icons: Chatwoot renders them as <span class="i-fluent-…"> (tailwindcss-icons
+    // plugin), so there is no <svg> in the DOM — the glyph lives in an inline
+    // SVG data-URI behind mask-image. Resolve it from the computed style, which
+    // keeps the ERP copy identical to this Chatwoot version without hardcoding
+    // an icon set. Falls back to a real <svg> if upstream ever switches.
+    var svgFromComputedStyle = function (element) {
+      try {
+        var style = window.getComputedStyle(element);
+        var uri = style.maskImage || style.webkitMaskImage || style.backgroundImage || '';
+        var match = /url\(["']?(data:image\/svg\+xml[^"')]*)/i.exec(uri);
+        if (!match) return null;
+
+        var data = match[1];
+        var comma = data.indexOf(',');
+        if (comma === -1) return null;
+
+        var meta = data.slice(0, comma);
+        var payload = data.slice(comma + 1);
+        var svg = /;base64/i.test(meta) ? window.atob(payload) : decodeURIComponent(payload);
+        return svg.indexOf('<svg') === -1 ? null : svg;
+      } catch (e) {
+        return null;
+      }
+    };
+
+    var iconMarkup = function (link) {
+      var svg = link.querySelector('svg');
+      if (svg) return svg.outerHTML;
+
+      var nodes = link.querySelectorAll('span');
+      for (var i = 0; i < nodes.length; i += 1) {
+        var markup = svgFromComputedStyle(nodes[i]);
+        if (markup) return markup;
+      }
+      return null;
+    };
+
     var lastMenuJson = '';
     var scanMenu = function () {
       var aside = document.querySelector('aside');
@@ -120,16 +158,18 @@
           } catch (e) { continue; }
         }
 
+        // The search entry opens a modal, it is not a destination.
+        if (!external && /\/search(\/|\?|$)/.test(path)) continue;
+
         var key = (external ? 'x:' : 'i:') + path;
         if (seen[key]) continue;
         seen[key] = true;
 
-        var icon = link.querySelector('svg');
         items.push({
           label: label,
           path: path,
           external: external,
-          icon: icon ? icon.outerHTML : null
+          icon: iconMarkup(link)
         });
       }
 

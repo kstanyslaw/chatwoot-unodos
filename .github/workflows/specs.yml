@@ -1,0 +1,81 @@
+name: specs
+
+# Runs the fork's Ruby specs.
+#
+# build-image.yml only builds the image and smoke-tests it, so the behaviour in
+# custom/ (ERP SSO ticket + iframe embed bridge) would otherwise stay unverified.
+# This job boots Rails with postgres+redis and runs the custom request specs.
+#
+# Kept intentionally small: only spec/requests/custom, no lint, no frontend
+# tests, one node. Expand if the fork grows more custom specs.
+
+on:
+  push:
+    branches:
+      - unodos/oidc
+      - 'unodos/**'
+  pull_request:
+    branches:
+      - unodos/oidc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rspec:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ''
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --mount type=tmpfs,destination=/var/lib/postgresql/data
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install pnpm dependencies
+        run: pnpm i --frozen-lockfile
+
+      - name: Prepare database
+        run: |
+          bundle exec rake db:create
+          bundle exec rake db:schema:load
+
+      - name: Run custom request specs
+        run: bundle exec rspec spec/requests/custom
+
+      - name: Upload rails log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rails-log
+          path: log
