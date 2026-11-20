@@ -13,6 +13,9 @@ export default {
   },
   methods: {
     setColorTheme() {
+      // ERP embed: the host shell owns the theme (custom/app/views/custom/_erp_embed.html.erb).
+      if (window.__ERP_THEME_LOCK__) return;
+
       if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
         this.theme = 'dark';
         document.documentElement.classList.add('dark');
@@ -25,6 +28,8 @@ export default {
       const mql = window.matchMedia('(prefers-color-scheme: dark)');
 
       mql.onchange = e => {
+        if (window.__ERP_THEME_LOCK__) return;
+
         if (e.matches) {
           this.theme = 'dark';
           document.documentElement.classList.add('dark');

@@ -102,6 +102,25 @@ RSpec.describe 'ERP iframe SSO hand-off', type: :request do
     end
   end
 
+  it 'forwards the sanitised embed flags to the login page' do
+    with_erp_env do
+      get '/erp/sso', params: { ticket: ticket_for(payload), erp_embed: '1', erp_theme: 'dark' }
+
+      expect(response).to have_http_status(:found)
+      expect(response.location).to include('erp_embed=1')
+      expect(response.location).to include('erp_theme=dark')
+    end
+  end
+
+  it 'drops embed flags with unexpected values' do
+    with_erp_env do
+      get '/erp/sso', params: { ticket: ticket_for(payload), erp_embed: '1', erp_theme: 'javascript:alert(1)' }
+
+      expect(response).to have_http_status(:found)
+      expect(response.location).not_to include('erp_theme=')
+    end
+  end
+
   it 'rejects a second redemption of the same ticket' do
     with_erp_env do
       ticket = ticket_for(payload)

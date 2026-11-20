@@ -1,0 +1,246 @@
+<%#
+  Uno Dos Cloud fork — ERP embed bridge.
+
+  Lets the ERP shell (erp.tripwave.cloud) drive a Chatwoot embedded in an iframe:
+  * theme       — ERP wins over prefers-color-scheme while embedded;
+  * navigation  — Chatwoot's own sidebar is hidden, the ERP renders its menu and
+                  asks this document to navigate;
+  * menu        — the rendered sidebar (labels, paths, icons) is announced to the
+                  parent, so the ERP copy cannot drift from this Chatwoot version.
+
+  Design notes
+  * Fully env-gated: the layout renders this partial only when
+    ERP_EMBED_ALLOWED_ORIGINS is set, and the script re-checks window.parent's
+    origin against that allowlist for every postMessage.
+  * No build step / no imports: inline ES5 so it runs before the Vue bundles and
+    survives Vite changes.
+  * Menu is scraped from the rendered `aside a[href]` instead of reaching into
+    Vue internals, so it keeps working across upstream versions (Chatwoot owns
+    labels, translations, permissions and icons).
+
+  Message contract (see docs/erp-embed.md):
+    ERP → Chatwoot: erp:theme {dark}, erp:navigate {path}, erp:menu:refresh
+    Chatwoot → ERP: chatwoot:ready {path}, chatwoot:menu {items}, chatwoot:route {path}
+%>
+<script>
+  (function () {
+    'use strict';
+
+    var cfg = window.chatwootConfig || {};
+    var allowed = String(cfg.erpEmbedAllowedOrigins || '')
+      .split(',')
+      .map(function (value) { return value.trim(); })
+      .filter(Boolean);
+    if (!allowed.length) return;
+
+    var isAllowed = function (origin) { return allowed.indexOf(origin) !== -1; };
+
+    var params = new URLSearchParams(window.location.search || '');
+    var storage = window.localStorage;
+
+    // ── embed detection ────────────────────────────────────────────────────
+    // `erp_embed=1` arrives on the first load (ERP appends it to the ticket
+    // URL); afterwards localStorage keeps the flag across SPA reloads.
+    // `erp_embed=0` explicitly leaves embed mode: the ERP opens the standalone
+    // app in a new tab from the same origin, and it must get its own sidebar back.
+    var embedParam = params.get('erp_embed');
+    if (embedParam === '0') {
+      storage.removeItem('erp_embed');
+      storage.removeItem('erp_theme');
+      return;
+    }
+
+    var embedded = embedParam === '1' || storage.getItem('erp_embed') === '1';
+    if (!embedded) return;
+    storage.setItem('erp_embed', '1');
+
+    var parentOrigin = null;
+    try {
+      if (document.referrer) {
+        var referrerOrigin = new URL(document.referrer).origin;
+        if (isAllowed(referrerOrigin)) parentOrigin = referrerOrigin;
+      }
+    } catch (e) { /* opaque referrer — wait for the first message */ }
+
+    var send = function (payload) {
+      if (!parentOrigin || window.parent === window) return;
+      try { window.parent.postMessage(payload, parentOrigin); } catch (e) { /* ignore */ }
+    };
+
+    // ── theme ──────────────────────────────────────────────────────────────
+    // Chatwoot sets `dark` on <body> (dashboard) or <html> (v3 login) and reacts
+    // to prefers-color-scheme. While embedded the ERP owns the theme; the flag
+    // makes themeHelper.js and v3/App.vue stand down.
+    window.__ERP_THEME_LOCK__ = true;
+
+    var applyTheme = function (dark) {
+      dark = !!dark;
+      document.documentElement.classList.toggle('dark', dark);
+      if (document.body) document.body.classList.toggle('dark', dark);
+      document.documentElement.style.setProperty('color-scheme', dark ? 'dark' : 'light');
+    };
+
+    var storedTheme = storage.getItem('erp_theme');
+    var themeParam = params.get('erp_theme');
+    if (themeParam === 'dark' || themeParam === 'light') {
+      storage.setItem('erp_theme', themeParam);
+      storedTheme = themeParam;
+    }
+    applyTheme(storedTheme === 'dark');
+
+    // ── hide Chatwoot's own sidebar ────────────────────────────────────────
+    document.documentElement.classList.add('erp-embed');
+    var style = document.createElement('style');
+    style.textContent = 'html.erp-embed aside{display:none!important}';
+    (document.head || document.documentElement).appendChild(style);
+
+    // ── menu discovery ─────────────────────────────────────────────────────
+    // Top-level sidebar entries as rendered for THIS user (permissions and
+    // translations included). Nested channel lists are flattened by href.
+    var lastMenuJson = '';
+    var scanMenu = function () {
+      var aside = document.querySelector('aside');
+      if (!aside) return false;
+
+      var items = [];
+      var seen = {};
+      var links = aside.querySelectorAll('a[href]');
+      for (var i = 0; i < links.length; i += 1) {
+        var link = links[i];
+        var href = link.getAttribute('href') || '';
+        var label = (link.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!label || !href || href.charAt(0) === '#') continue;
+
+        var external = /^https?:\/\//i.test(href);
+        var path = href;
+        if (!external) {
+          try {
+            var url = new URL(href, window.location.origin);
+            path = url.pathname + url.search;
+          } catch (e) { continue; }
+        }
+
+        var key = (external ? 'x:' : 'i:') + path;
+        if (seen[key]) continue;
+        seen[key] = true;
+
+        var icon = link.querySelector('svg');
+        items.push({
+          label: label,
+          path: path,
+          external: external,
+          icon: icon ? icon.outerHTML : null
+        });
+      }
+
+      var json = JSON.stringify(items);
+      if (json !== lastMenuJson) {
+        lastMenuJson = json;
+        send({ type: 'chatwoot:menu', items: items });
+      }
+      return items.length > 0;
+    };
+
+    var readySent = false;
+    var announce = function () {
+      if (!readySent) {
+        readySent = true;
+        send({ type: 'chatwoot:ready', path: window.location.pathname });
+      }
+      scanMenu();
+    };
+
+    // ── route notifications ────────────────────────────────────────────────
+    var notifyRoute = function () {
+      send({ type: 'chatwoot:route', path: window.location.pathname + window.location.search });
+    };
+    ['pushState', 'replaceState'].forEach(function (method) {
+      var original = history[method];
+      history[method] = function () {
+        var result = original.apply(this, arguments);
+        notifyRoute();
+        return result;
+      };
+    });
+    window.addEventListener('popstate', notifyRoute);
+
+    // ── ERP commands ───────────────────────────────────────────────────────
+    var findLink = function (path) {
+      var links = document.querySelectorAll('a[href]');
+      for (var i = 0; i < links.length; i += 1) {
+        var href = links[i].getAttribute('href') || '';
+        if (href === path) return links[i];
+        try {
+          var url = new URL(href, window.location.origin);
+          if (url.pathname + url.search === path) return links[i];
+        } catch (e) { /* ignore */ }
+      }
+      return null;
+    };
+
+    window.addEventListener('message', function (event) {
+      if (!isAllowed(event.origin)) return;
+      if (window.parent !== event.source) return;
+
+      // First contact (referrer was empty/opaque): replay what was scanned
+      // before the parent origin was known, otherwise the menu would never
+      // reach the ERP until something changes in the sidebar.
+      var firstContact = !parentOrigin;
+      parentOrigin = event.origin;
+      if (firstContact) {
+        if (readySent) send({ type: 'chatwoot:ready', path: window.location.pathname });
+        if (lastMenuJson) {
+          try { send({ type: 'chatwoot:menu', items: JSON.parse(lastMenuJson) }); } catch (e) { /* ignore */ }
+        }
+      }
+
+      var data = event.data || {};
+      if (data.type === 'erp:theme') {
+        applyTheme(data.dark);
+        if (document.body) document.body.classList.toggle('dark', !!data.dark);
+      } else if (data.type === 'erp:navigate' && typeof data.path === 'string' && data.path) {
+        // Click the (hidden) router-link so the SPA does a client-side push;
+        // fall back to a hard navigation for external/unmatched paths.
+        var link = findLink(data.path);
+        if (link) link.click();
+        else window.location.assign(data.path);
+      } else if (data.type === 'erp:menu:refresh') {
+        lastMenuJson = '';
+        scanMenu();
+      }
+    });
+
+    // ── lifecycle ──────────────────────────────────────────────────────────
+    var startScanning = function () {
+      announce();
+      var attempts = 0;
+      var timer = window.setInterval(function () {
+        attempts += 1;
+        var found = scanMenu();
+        if (found || attempts > 40) window.clearInterval(timer);
+      }, 500);
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', startScanning);
+    } else {
+      startScanning();
+    }
+
+    // Re-scan when the sidebar re-renders (account switch, permission changes).
+    if (window.MutationObserver) {
+      var pending = null;
+      var observer = new MutationObserver(function () {
+        if (pending) return;
+        pending = window.setTimeout(function () {
+          pending = null;
+          scanMenu();
+          notifyRoute();
+        }, 400);
+      });
+      document.addEventListener('DOMContentLoaded', function () {
+        observer.observe(document.body, { childList: true, subtree: true });
+      });
+    }
+  })();
+</script>

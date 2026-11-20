@@ -2,6 +2,9 @@ import { LocalStorage } from 'shared/helpers/localStorage';
 import { LOCAL_STORAGE_KEYS } from 'dashboard/constants/localStorage';
 
 export const setColorTheme = isOSOnDarkMode => {
+  // ERP embed: the host shell owns the theme (custom/app/views/custom/_erp_embed.html.erb).
+  if (window.__ERP_THEME_LOCK__) return;
+
   const selectedColorScheme =
     LocalStorage.get(LOCAL_STORAGE_KEYS.COLOR_SCHEME) || 'auto';
   if (

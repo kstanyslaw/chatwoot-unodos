@@ -24,6 +24,13 @@ module Custom
     TICKET_TTL_SECONDS = 60
     CLOCK_SKEW_SECONDS = 10
 
+    # Embed presentation flags forwarded from the ERP iframe URL. They are
+    # sanitised here so the redirect can only carry known values.
+    EMBED_PARAMS = {
+      'erp_embed' => %w[0 1],
+      'erp_theme' => %w[dark light]
+    }.freeze
+
     # GET /erp/sso?ticket=…
     def show
       # Feature is off unless the ERP shared secret is configured: answer 404
@@ -111,9 +118,16 @@ module Custom
         ssoAccountId: payload['acc'].presence,
         ssoConversationId: payload['conv'].presence,
         locale: payload['loc'].presence
-      }.compact
+      }.merge(embed_params).compact
 
       "#{frontend_url}/app/login?#{query.to_query}"
+    end
+
+    def embed_params
+      EMBED_PARAMS.each_with_object({}) do |(key, allowed), acc|
+        value = params[key]
+        acc[key.to_sym] = value if value.present? && allowed.include?(value)
+      end
     end
 
     def login_error_url(error)
