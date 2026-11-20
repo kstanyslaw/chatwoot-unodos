@@ -106,11 +106,14 @@
     var svgFromComputedStyle = function (element) {
       try {
         var style = window.getComputedStyle(element);
-        var uri = style.maskImage || style.webkitMaskImage || style.backgroundImage || '';
-        var match = /url\(["']?(data:image\/svg\+xml[^"')]*)/i.exec(uri);
-        if (!match) return null;
+        var raw = style.maskImage || style.webkitMaskImage || style.backgroundImage || '';
 
-        var data = match[1];
+        // Tear off the outer url(...) wrapper only: iconify data-URIs carry
+        // quotes inside (xmlns='…'), so a character class would truncate them.
+        var wrapped = /^url\(([\s\S]*)\)$/.exec(raw.trim());
+        var data = wrapped ? wrapped[1].replace(/^["']|["']$/g, '') : raw.trim();
+        if (data.indexOf('data:image/svg+xml') !== 0) return null;
+
         var comma = data.indexOf(',');
         if (comma === -1) return null;
 
@@ -141,14 +144,21 @@
     // because the ERP renders two levels.
     var groupTriggerFor = function (link, aside) {
       var node = link.parentElement;
+      var outermost = null;
+
       while (node && node !== aside) {
         if (node.tagName === 'LI') {
-          var trigger = node.querySelector(':scope > button');
-          if (trigger) return trigger;
+          // SidebarGroupHeader renders <div role="button" title="…">; other
+          // layouts use a real <button>. The first match while walking up is
+          // the nearest header, the last one is the top-level section — the ERP
+          // shows two levels, so the outermost wins.
+          var header = node.querySelector(':scope > [role="button"][title], :scope > button');
+          if (header) outermost = header;
         }
         node = node.parentElement;
       }
-      return null;
+
+      return outermost;
     };
 
     var lastMenuJson = '';
