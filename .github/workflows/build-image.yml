@@ -16,6 +16,12 @@ name: build-image
 on:
   push:
     branches: [unodos/oidc]
+    # CI/docs-only changes must not mint a new -oidc.<n> tag: the image would be
+    # byte-identical and the deployment pin would point at noise.
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 permissions:

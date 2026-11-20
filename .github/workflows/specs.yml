@@ -24,7 +24,9 @@ permissions:
 
 jobs:
   rspec:
-    runs-on: ubuntu-latest
+    # Pin the runner: ubuntu-latest is 26.04, where ruby-builder has no
+    # prebuilt 3.4.4 (the version pinned by .ruby-version and the image).
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
