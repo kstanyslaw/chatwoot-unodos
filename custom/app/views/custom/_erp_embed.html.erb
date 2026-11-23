@@ -39,20 +39,19 @@
     var storage = window.localStorage;
 
     // ── embed detection ────────────────────────────────────────────────────
-    // `erp_embed=1` arrives on the first load (ERP appends it to the ticket
-    // URL); afterwards localStorage keeps the flag across SPA reloads.
-    // `erp_embed=0` explicitly leaves embed mode: the ERP opens the standalone
-    // app in a new tab from the same origin, and it must get its own sidebar back.
+    // Embed mode is a property of the browsing context, never of storage: the
+    // same origin serves both the ERP iframe and the standalone app, so a
+    // persisted flag leaked into direct visits (their sidebar vanished).
+    // Rule: inside a frame AND the parent proves it is the ERP (allowlisted
+    // referrer, or the first valid erp:* message).
+    var inFrame = window.self !== window.top;
     var embedParam = params.get('erp_embed');
-    if (embedParam === '0') {
-      storage.removeItem('erp_embed');
-      storage.removeItem('erp_theme');
+
+    if (!inFrame || embedParam === '0') {
+      // Standalone visit: Chatwoot owns its sidebar and theme. Nothing is
+      // hidden, nothing is persisted, nothing is cleared.
       return;
     }
-
-    var embedded = embedParam === '1' || storage.getItem('erp_embed') === '1';
-    if (!embedded) return;
-    storage.setItem('erp_embed', '1');
 
     var parentOrigin = null;
     try {
@@ -67,12 +66,12 @@
       try { window.parent.postMessage(payload, parentOrigin); } catch (e) { /* ignore */ }
     };
 
-    // ── theme ──────────────────────────────────────────────────────────────
+    // ── theme + sidebar (embed mode only) ──────────────────────────────────
     // Chatwoot sets `dark` on <body> (dashboard) or <html> (v3 login) and reacts
-    // to prefers-color-scheme. While embedded the ERP owns the theme; the flag
-    // makes themeHelper.js and v3/App.vue stand down.
-    window.__ERP_THEME_LOCK__ = true;
-
+    // to prefers-color-scheme. Inside the ERP iframe the shell owns the theme:
+    // `__ERP_THEME_LOCK__` makes themeHelper.js and v3/App.vue stand down, and
+    // the value is remembered (in this origin's storage) so a reload inside the
+    // frame does not flash light. Standalone never reaches this code.
     var applyTheme = function (dark) {
       dark = !!dark;
       document.documentElement.classList.toggle('dark', dark);
@@ -80,19 +79,34 @@
       document.documentElement.style.setProperty('color-scheme', dark ? 'dark' : 'light');
     };
 
-    var storedTheme = storage.getItem('erp_theme');
-    var themeParam = params.get('erp_theme');
-    if (themeParam === 'dark' || themeParam === 'light') {
-      storage.setItem('erp_theme', themeParam);
-      storedTheme = themeParam;
-    }
-    applyTheme(storedTheme === 'dark');
+    var embedApplied = false;
 
-    // ── hide Chatwoot's own sidebar ────────────────────────────────────────
-    document.documentElement.classList.add('erp-embed');
-    var style = document.createElement('style');
-    style.textContent = 'html.erp-embed aside{display:none!important}';
-    (document.head || document.documentElement).appendChild(style);
+    var enableEmbed = function (origin) {
+      if (embedApplied) return;
+      embedApplied = true;
+      if (origin) parentOrigin = origin;
+
+      document.documentElement.classList.add('erp-embed');
+      if (!document.getElementById('erp-embed-style')) {
+        var style = document.createElement('style');
+        style.id = 'erp-embed-style';
+        style.textContent = 'html.erp-embed aside{display:none!important}';
+        (document.head || document.documentElement).appendChild(style);
+      }
+
+      window.__ERP_THEME_LOCK__ = true;
+
+      var storedTheme = storage.getItem('erp_theme');
+      var themeParam = params.get('erp_theme');
+      if (themeParam === 'dark' || themeParam === 'light') {
+        storage.setItem('erp_theme', themeParam);
+        storedTheme = themeParam;
+      }
+      applyTheme(storedTheme === 'dark');
+    };
+
+    // The referrer already proves the ERP parent: apply before first paint.
+    if (parentOrigin) enableEmbed(null);
 
     // ── menu discovery ─────────────────────────────────────────────────────
     // Top-level sidebar entries as rendered for THIS user (permissions and
@@ -278,6 +292,8 @@
       // reach the ERP until something changes in the sidebar.
       var firstContact = !parentOrigin;
       parentOrigin = event.origin;
+      // Opaque referrer: the parent is only proven now — switch embed mode on.
+      enableEmbed(null);
       if (firstContact) {
         if (readySent) send({ type: 'chatwoot:ready', path: window.location.pathname });
         if (lastMenuJson) {
