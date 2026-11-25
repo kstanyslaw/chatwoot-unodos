@@ -166,7 +166,10 @@
           // layouts use a real <button>. The first match while walking up is
           // the nearest header, the last one is the top-level section — the ERP
           // shows two levels, so the outermost wins.
-          var header = node.querySelector(':scope > [role="button"][title], :scope > button');
+          // A group header is a non-navigating <div role="button" title="…">.
+          // A header rendered as <a role="button"> IS the leaf itself and must
+          // not become its own parent (that produced "Calls → Calls").
+          var header = node.querySelector(':scope > div[role="button"][title], :scope > button');
           if (header) outermost = header;
         }
         node = node.parentElement;
@@ -234,9 +237,23 @@
         group.children.push(entry);
       }
 
-      items = items.filter(function (item) {
-        return !item.children || item.children.length > 0;
-      });
+      items = items
+        .filter(function (item) {
+          return !item.children || item.children.length > 0;
+        })
+        .map(function (item) {
+          // "Мои Входящие → Мои Входящие": a group wrapping exactly one child
+          // with the same label is just that leaf.
+          if (
+            item.children &&
+            item.children.length === 1 &&
+            item.children[0].label === item.label &&
+            !item.children[0].children
+          ) {
+            return item.children[0];
+          }
+          return item;
+        });
 
       var json = JSON.stringify(items);
       if (json !== lastMenuJson) {
